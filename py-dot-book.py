@@ -1,11 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-#Based on pyslice by Manish Singh
-
-#Copyright (c) Manish Singh
-#javascript animation support by Joao S. O. Bueno Calligaris (2004)
-
 #   Gimp-Python - allows the writing of Gimp plugins in Python.
 #   Copyright (C) 2003, 2005  Manish Singh <yosh@gimp.org>
 #
@@ -23,23 +18,24 @@
 #   along with this program; if not, write to the Free Software
 #   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
+#Based on pyslice by Manish Singh
 # (c) 2003 Manish Singh.
 #"Guillotine implemented ala python, with html output
 # (based on perlotine by Seth Burgess)",
-# Modified by João S. O. Bueno Calligaris to allow  dhtml animations (2005)
 
+from __future__ import division
 import os
-
 from gimpfu import *
 import os.path
 
 gettext.install("gimp20-python", gimp.locale_directory, unicode=True)
 
 def pydotbook(image, drawable, save_path, html_filename,
-            image_basename, separate, image_path):
+            image_basename, separate, image_path, max_w, max_h):
 
     vert, horz = get_guides(image)
 
+    # make sure this image is split into 4 quadrants
     if len(vert) != 1 and len(horz) != 1:
         return
 
@@ -74,40 +70,36 @@ def pydotbook(image, drawable, save_path, html_filename,
     for x in range(0, len(image.layers)):
 	temp_layer = image.layers[x]
 
-	left = 0
-
-	for j in range(0, len(vert) + 1):
-            if j == len(vert):
-            	right = image.width
+        for i in range(len(horz), -1, -1):
+            if i == 0:
+                bottom = image.height
+                top = image.get_guide_position(horz[0])
             else:
-                right = image.get_guide_position(vert[j])
+                bottom = image.get_guide_position(horz[0])
+                top = 0;
 
-            top = 0
-
-            for i in range(0, len(horz) + 1):
-	    	if i == len(horz):
-                    bottom = image.height
+            for j in range(len(vert), -1, -1):
+            	if j == 0:
+                    right = image.get_guide_position(vert[0])
+                    left = 0
             	else:
-                    bottom = image.get_guide_position(horz[i])
+                    right = image.width
+                    left = image.get_guide_position(vert[0])
 
 
                 src = (image_relative_path +
                        save_quadrant (image, temp_layer, image_path, image_basename,
-                              left, right, top, bottom, x, i, j))
+                              left, right, top, bottom, x, i, j, max_w, max_h))
 
             	html.addimage(src)
-
-	        top = bottom
 
 	        progress += progress_increment
 	        gimp.progress_update(progress)
 
-            left = right
-
     html.close()
 
 def save_quadrant(image, drawable, image_path, image_basename,
-          	  left, right, top, bottom, x, i, j):
+          	  left, right, top, bottom, x, i, j, max_w, max_h):
     src = "%s_%d_%d_%d.jpg" % (image_basename, x, i, j)
     filename = os.path.join(image_path, src)
 
@@ -117,7 +109,22 @@ def save_quadrant(image, drawable, image_path, image_basename,
 
     temp_image.disable_undo()
     temp_image.crop(right - left, bottom - top, left, top)
-    # should resize to 520x740 for kindle touch
+
+    temp_width = right - left;
+    temp_height = bottom - top;
+
+    #print 'Width: ', temp_width, ' Max Width: ', max_w
+    width_factor = max_w / temp_width
+    #print 'Height: ', temp_height, ' Max Height: ', max_h
+    height_factor = max_h / temp_height
+    #print 'Width factor: ', width_factor, ' Height factor: ', height_factor
+    scale_factor = height_factor if width_factor > height_factor else width_factor
+    #print 'Scale factor: ', scale_factor
+    final_w = int(temp_width * scale_factor)
+    final_h = int(temp_height * scale_factor)
+    #print 'Final dimensions: ', final_w, 'x', final_h
+
+    temp_image.scale(final_w, final_h)
     
     if image.base_type == INDEXED:
         pdb.gimp_image_convert_rgb (temp_image)
@@ -197,21 +204,23 @@ class HTMLWriter:
         if isinstance (src, list):
             prefix = "images_%s" % self.image_prefix
             self.images.append ({"index" : (row, col), "plain" : src[0]})
-            out = ('    <img src="%s" />\n') % (src[0])
+            out = ('    <h2><img src="%s" /></h2>\n') % (src[0])
 
         else:
-	    out = ('    <img src="%s" />\n') %  (src)
+	    out = ('    <h2><img src="%s" /></h2>\n') %  (src)
 
         self.write(out)
 
 register(
     "python-fu-dot-book",
     # table snippet means a small piece of HTML code here
-    N_("Cuts an image along its guides, rotates 90 deg, creates an HTML page suitable for an e-reader"),
-    """Import a drill-chart PDF as layers.  Add guides to an image. 
-    Then run this. It will cut along the guides, rotate the images 90 degrees,
-    order them as such upper-left, lower-left, upper-right, lower-right.  Images
-    will be sized optimal to a regular sized Kindle and save in a single HTML page. """,
+    N_("Cuts a Pyware 'Personal Drill Book' along its guides, creates an HTML page suitable for an e-reader"),
+    """Import a Pyware 'Personal Drill Book' PDF as layers.  Rotate it
+    90 degrees clockwise.  Add guides to split the image into four (4)
+    quadrants.  Then run the Dot Book filter. It will cut along the guides, order
+    them as such (pre-rotated quadrant) upper-left, lower-left,
+    upper-right, lower-right.  Images will be saved in a single HTML
+    page suitable to convert with calibre.""",
     "Justin Foell",
     "Justin Foell",
     "2012",
@@ -224,7 +233,9 @@ register(
         (PF_STRING, "html-filename",  _("Filename for export"),  "dot-book.html"),
         (PF_STRING, "image-basename", _("Image name prefix"),    "dot-book"),
         (PF_TOGGLE, "separate-image-dir",  _("Separate image folder"), False),
-        (PF_STRING, "relative-image-path", _("Folder for image export"), "images")
+        (PF_STRING, "relative-image-path", _("Folder for image export"), "images"),
+	(PF_INT, "max-width", _("Width Constraint"), 520),
+	(PF_INT, "max-height", _("Height Constraint"), 740)	
     ],
     [],
     pydotbook,
