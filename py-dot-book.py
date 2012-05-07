@@ -30,20 +30,55 @@ import os.path
 
 gettext.install("gimp20-python", gimp.locale_directory, unicode=True)
 
-def pydotbook(image, drawable, save_path, html_filename,
-            image_basename, separate, image_path, max_w, max_h):
+class DotBook:
+    def __init__(self, image, drawable, save_path, html_filename, image_basename, 
+		separate, image_path, landscape, max_w, max_h, vert, horz):
 
-    vert, horz = get_guides(image)
+        self.image = image
+	self.image_basename = image_basename
+	self.image_path = image_path
+	gimp.progress_init(_("Dot Book"))
+        self.progress_increment = 1 / ( 4 * len(self.image.layers) )
+    	self.progress = 0.0
+	self.landscape = landscape
+	self.max_w = max_w
+	self.max_h = max_h
+	self.vert = vert
+	self.horz = horz
 
-    # make sure this image is split into 4 quadrants
-    if len(vert) != 1 and len(horz) != 1:
-        return
+	save_path = self.check_path(save_path)
 
-    gimp.progress_init(_("Dot Book"))
-    progress_increment = 1 / ( 4 * len(image.layers) )
-    progress = 0.0
+	if not os.path.isdir(save_path):
+            save_path = os.path.dirname(save_path)
 
-    def check_path(path):
+    	if separate:
+            self.image_relative_path = self.image_path
+            if not self.image_relative_path.endswith("/"):
+		self.image_relative_path += "/"
+            self.image_path = self.check_path(os.path.join(save_path, self.image_path))
+    	else:
+            self.image_relative_path = ''
+            self.image_path = save_path
+
+	self.html = HTMLWriter(os.path.join(save_path, html_filename))
+
+
+    @staticmethod
+    def main(image, drawable, save_path, html_filename,
+             image_basename, separate, image_path, landscape, max_w, max_h):
+	
+        vert, horz = get_guides(image)
+
+	# make sure this image is split into 4 quadrants
+	if len(vert) != 1 and len(horz) != 1:
+            return
+
+	dotbook = DotBook(image, drawable, save_path, html_filename, image_basename,
+			separate, image_path, landscape, max_w, max_h, vert, horz)
+	dotbook.process_image()
+
+
+    def check_path(self, path):
         path = os.path.abspath(path)
 
         if not os.path.exists(path):
@@ -51,88 +86,102 @@ def pydotbook(image, drawable, save_path, html_filename,
 
         return path
 
-    save_path = check_path(save_path)
 
-    if not os.path.isdir(save_path):
-        save_path = os.path.dirname(save_path)
+    def process_image(self):
+    	for x in range(0, len(self.image.layers)):
+            temp_layer = self.image.layers[x]	
 
-    if separate:
-        image_relative_path = image_path
-        if not image_relative_path.endswith("/"):
-            image_relative_path += "/"
-        image_path = check_path(os.path.join(save_path, image_path))
-    else:
-        image_relative_path = ''
-        image_path = save_path
+	    if self.landscape:
+		self.process_landscape(temp_layer, x)
+	    else:
+		self.process_portrait(temp_layer, x)
 
-    html = HTMLWriter(os.path.join(save_path, html_filename))
+	self.html.close()
+		
 
-    for x in range(0, len(image.layers)):
-	temp_layer = image.layers[x]
+    def process_landscape(self, temp_layer, x):
+        left = 0
 
-        for i in range(len(horz), -1, -1):
-            if i == 0:
-                bottom = image.height
-                top = image.get_guide_position(horz[0])
+        for j in range(0, len(self.vert) + 1):
+            if j == len(self.vert):
+                right = self.image.width
             else:
-                bottom = image.get_guide_position(horz[0])
-                top = 0;
+                right = self.image.get_guide_position(self.vert[j])
 
-            for j in range(len(vert), -1, -1):
-            	if j == 0:
-                    right = image.get_guide_position(vert[0])
+            top = 0
+
+            for i in range(0, len(self.horz) + 1):
+            	if i == len(self.horz):
+                    bottom = self.image.height
+            	else:
+                    bottom = self.image.get_guide_position(self.horz[i])
+
+            	self.process_quadrant(temp_layer, left, right, top, bottom, x, i, j)
+	
+            	top = bottom
+
+            left = right
+
+
+    def process_portrait(self, temp_layer, x):
+	for i in range(len(self.horz), -1, -1):
+            if i == 0:
+            	bottom = self.image.height
+            top = self.image.get_guide_position(self.horz[0])
+    	else:
+            bottom = self.image.get_guide_position(self.horz[0])
+            top = 0;
+
+            for j in range(len(self.vert), -1, -1):
+		if j == 0:
+                    right = self.image.get_guide_position(self.vert[0])
                     left = 0
             	else:
-                    right = image.width
-                    left = image.get_guide_position(vert[0])
+                    right = self.image.width
+                    left = self.image.get_guide_position(self.vert[0])
+
+		self.process_quadrant(temp_layer, left, right, top, bottom, x, i, j)
 
 
-                src = (image_relative_path +
-                       save_quadrant (image, temp_layer, image_path, image_basename,
-                              left, right, top, bottom, x, i, j, max_w, max_h))
+    def process_quadrant(self, temp_layer, left, right, top, bottom, x, i, j):
+	src = (self.image_relative_path +
+                       self.save_quadrant (temp_layer, left, right, top, bottom, x, i, j))
 
-            	html.addimage(src)
+        self.html.addimage(src)
+        self.progress += self.progress_increment
+        gimp.progress_update(self.progress)
+	
 
-	        progress += progress_increment
-	        gimp.progress_update(progress)
+    def save_quadrant(self, drawable, left, right, top, bottom, x, i, j):
+	src = "%s_%d_%d_%d.jpg" % (self.image_basename, x, i, j)
+    	filename = os.path.join(self.image_path, src)
 
-    html.close()
+    	temp_image = pdb.gimp_image_new (drawable.width, drawable.height, self.image.base_type)
+    	temp_drawable = pdb.gimp_layer_new_from_drawable (drawable, temp_image)
+    	temp_image.add_layer (temp_drawable, -1)
 
-def save_quadrant(image, drawable, image_path, image_basename,
-          	  left, right, top, bottom, x, i, j, max_w, max_h):
-    src = "%s_%d_%d_%d.jpg" % (image_basename, x, i, j)
-    filename = os.path.join(image_path, src)
+    	temp_image.disable_undo()
+    	temp_image.crop(right - left, bottom - top, left, top)
 
-    temp_image = pdb.gimp_image_new (drawable.width, drawable.height, image.base_type)
-    temp_drawable = pdb.gimp_layer_new_from_drawable (drawable, temp_image)
-    temp_image.add_layer (temp_drawable, -1)
+    	temp_width = right - left;
+    	temp_height = bottom - top;
 
-    temp_image.disable_undo()
-    temp_image.crop(right - left, bottom - top, left, top)
+    	width_factor = self.max_w / temp_width
+    	height_factor = self.max_h / temp_height
+    	scale_factor = height_factor if width_factor > height_factor else width_factor
+    	final_w = int(temp_width * scale_factor)
+    	final_h = int(temp_height * scale_factor)
 
-    temp_width = right - left;
-    temp_height = bottom - top;
-
-    #print 'Width: ', temp_width, ' Max Width: ', max_w
-    width_factor = max_w / temp_width
-    #print 'Height: ', temp_height, ' Max Height: ', max_h
-    height_factor = max_h / temp_height
-    #print 'Width factor: ', width_factor, ' Height factor: ', height_factor
-    scale_factor = height_factor if width_factor > height_factor else width_factor
-    #print 'Scale factor: ', scale_factor
-    final_w = int(temp_width * scale_factor)
-    final_h = int(temp_height * scale_factor)
-    #print 'Final dimensions: ', final_w, 'x', final_h
-
-    temp_image.scale(final_w, final_h)
+    	temp_image.scale(final_w, final_h)
     
-    if image.base_type == INDEXED:
-        pdb.gimp_image_convert_rgb (temp_image)
+    	if self.image.base_type == INDEXED:
+            pdb.gimp_image_convert_rgb (temp_image)
 
-    pdb.gimp_file_save(temp_image, temp_drawable, filename, filename)
+    	pdb.gimp_file_save(temp_image, temp_drawable, filename, filename)
 
-    gimp.delete(temp_image)
-    return src
+    	gimp.delete(temp_image)
+    	return src
+
 
 class GuideIter:
     def __init__(self, image):
@@ -145,6 +194,7 @@ class GuideIter:
     def next_guide(self):
         self.guide = self.image.find_next_guide(self.guide)
         return self.guide
+
 
 def get_guides(image):
     vguides = []
@@ -173,6 +223,7 @@ def get_guides(image):
     hguides = [g[1] for g in hguides]
 
     return vguides, hguides
+
 
 class HTMLWriter:
     def __init__(self, filename):
@@ -211,16 +262,18 @@ class HTMLWriter:
 
         self.write(out)
 
+
 register(
     "python-fu-dot-book",
     # table snippet means a small piece of HTML code here
     N_("Cuts a Pyware 'Personal Drill Book' along its guides, creates an HTML page suitable for an e-reader"),
     """Import a Pyware 'Personal Drill Book' PDF as layers.  Rotate it
-    90 degrees clockwise.  Add guides to split the image into four (4)
-    quadrants.  Then run the Dot Book filter. It will cut along the guides, order
-    them as such (pre-rotated quadrant) upper-left, lower-left,
-    upper-right, lower-right.  Images will be saved in a single HTML
-    page suitable to convert with calibre.""",
+    90 degrees clockwise if your reader doesn't have a landscape mode.
+    Add guides to split the image into four (4) quadrants.  Then run
+    the Dot Book filter. It will cut along the guides, order them as
+    such: upper-left, lower-left, upper-right, lower-right.  Images
+    will be saved in a single HTML page suitable to convert with
+    calibre.""",
     "Justin Foell",
     "Justin Foell",
     "2012",
@@ -234,11 +287,12 @@ register(
         (PF_STRING, "image-basename", _("Image name prefix"),    "dot-book"),
         (PF_TOGGLE, "separate-image-dir",  _("Separate image folder"), False),
         (PF_STRING, "relative-image-path", _("Folder for image export"), "images"),
-	(PF_INT, "max-width", _("Width Constraint"), 520),
-	(PF_INT, "max-height", _("Height Constraint"), 740)	
+        (PF_TOGGLE, "landscape-mode",  _("Landscape Mode"), True),
+	(PF_INT, "max-width", _("Width Constraint"), 740),
+	(PF_INT, "max-height", _("Height Constraint"), 520)	
     ],
     [],
-    pydotbook,
+    DotBook.main,
     menu="<Image>/Filters/Web",
     domain=("gimp20-python", gimp.locale_directory)
     )
